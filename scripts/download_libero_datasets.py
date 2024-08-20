@@ -10,7 +10,7 @@ def parse_args():
     parser.add_argument(
         "--download-dir",
         type=str,
-        default="./data/",
+        default="./data/libero/",
     )
     parser.add_argument(
         "--datasets",
