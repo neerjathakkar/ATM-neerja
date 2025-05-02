@@ -256,8 +256,6 @@ class MammalNetDataset(Dataset):
     
     def _load_all_video_frames(self, video_path, global_shot):
         """Load all frames from a video file between global_shot start and end frames"""
-        print("loading video frames from ", video_path)
-        print("global shot", global_shot)
         cap = cv2.VideoCapture(video_path)
         frames = []
         # Get original width and height
@@ -301,7 +299,7 @@ class MammalNetDataset(Dataset):
         
         if frame_count < expected_frames:
             print(f"Warning: Expected {expected_frames} frames but got {frame_count} from {video_path}")
-        print(f"got {len(frames)} frames")
+        # print(f"got {len(frames)} frames")
         
         cap.release()
         # Convert frames to tensor with shape (t, c, h, w)

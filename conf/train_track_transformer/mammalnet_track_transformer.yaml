@@ -21,7 +21,8 @@ train_gpus: [0]
 
 # Training
 lr: 1e-4
-batch_size: 512
+# batch_size: 512
+batch_size: 1
 mix_precision: true
 num_workers: 8
 val_freq: 5
@@ -93,6 +94,7 @@ dataset_cfg:
   frame_stack: ${frame_stack}
   num_track_ts: ${num_track_ts}
   num_track_ids: ${num_track_ids}
+  task_embedding_dim: 768
   # cache_all: true
   cache_all: false
   cache_image: false

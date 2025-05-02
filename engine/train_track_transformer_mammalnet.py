@@ -16,6 +16,7 @@ from atm.utils.train_utils import init_wandb, setup_lr_scheduler, setup_optimize
 
 @hydra.main(config_path="../conf/train_track_transformer", version_base="1.3")
 def main(cfg: DictConfig):
+    print(f"using {cfg.epochs} epochs")
     work_dir = HydraConfig.get().runtime.output_dir
     setup(cfg)
     OmegaConf.save(config=cfg, f=os.path.join(work_dir, "config.yaml"))
@@ -57,6 +58,7 @@ def main(cfg: DictConfig):
     best_loss_logger = BestAvgLoss(window_size=5)
 
     for epoch in metric_logger.log_every(range(cfg.epochs), 1, ""):
+        print(f"epoch {epoch} out of {cfg.epochs}")
         train_metrics = run_one_epoch(
             fabric,
             model,
@@ -113,8 +115,8 @@ def main(cfg: DictConfig):
                     wandb_vis_track = wandb.Video(vis_dict["combined_track_vid"], fps=10, format="mp4", caption=caption)
                     None if cfg.dry else wandb.log({f"{mode}/reconstruct_track": wandb_vis_track}, step=epoch)
 
-                vis_and_log(model, train_vis_dataloader, mode="train")
-                vis_and_log(model, val_vis_dataloader, mode="val")
+                # vis_and_log(model, train_vis_dataloader, mode="train")
+                # vis_and_log(model, val_vis_dataloader, mode="val")
 
     if fabric.is_global_zero:
         model.save(f"{work_dir}/model_final.ckpt")
@@ -139,16 +141,21 @@ def run_one_epoch(fabric,
 
     model.train()
     i = 0
-    for vid, track, vis, task_emb in tqdm(dataloader):
+    for batch in tqdm(dataloader):
+        vid = batch['video']
+        track = batch['tracks']
+        vis = batch['visibility']
+        task_emb = batch['task_emb']
         if mix_precision:
             vid, track, vis, task_emb = vid.bfloat16(), track.bfloat16(), vis.bfloat16(), task_emb.bfloat16()
         b, t, c, h, w = vid.shape
         b, tl, n, _ = track.shape
         b, tl, n = vis.shape
-        loss, ret_dict = model.forward_loss(
+        loss, ret_dict = model(
             vid,
             track,
             task_emb,
+            mode="loss",
             lbd_track=lbd_track,
             lbd_img=lbd_img,
             p_img=p_img)  # do not use vis
@@ -183,17 +190,22 @@ def evaluate(model, dataloader, lbd_track, lbd_img, p_img, mix_precision=False, 
     model.eval()
 
     i = 0
-    for vid, track, vis, task_emb in tqdm(dataloader):
+    for batch in tqdm(dataloader):
+        vid = batch['video']
+        track = batch['tracks']
+        vis = batch['visibility']
+        task_emb = batch['task_emb']
         vid, track, vis, task_emb = vid.cuda(), track.cuda(), vis.cuda(), task_emb.cuda()
         if mix_precision:
             vid, track, vis, task_emb = vid.bfloat16(), track.bfloat16(), vis.bfloat16(), task_emb.bfloat16()
         b, t, c, h, w = vid.shape
         b, tl, n, _ = track.shape
 
-        _, ret_dict = model.forward_loss(
+        _, ret_dict = model(
             vid,
             track,
             task_emb,
+            mode="loss",
             lbd_track=lbd_track,
             lbd_img=lbd_img,
             p_img=p_img,
@@ -219,11 +231,14 @@ def visualize(model, dataloader, mix_precision=False):
     model.eval()
     keep_eval_dict = None
 
-    for i, (vid, track, vis, task_emb) in enumerate(dataloader):
+    for i, batch in enumerate(dataloader):
+        vid = batch['video']
+        track = batch['tracks']
+        task_emb = batch['task_emb']
         vid, track, task_emb = vid.cuda(), track.cuda(), task_emb.cuda()
         if mix_precision:
             vid, track, task_emb = vid.bfloat16(), track.bfloat16(), task_emb.bfloat16()
-        _, eval_dict = model.forward_vis(vid, track, task_emb, p_img=0)
+        _, eval_dict = model(vid, track, task_emb, p_img=0, mode="vis")
         if keep_eval_dict is None or torch.rand(1) < 0.1:
             keep_eval_dict = eval_dict
 

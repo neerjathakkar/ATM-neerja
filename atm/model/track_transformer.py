@@ -170,30 +170,35 @@ class TrackTransformer(nn.Module):
         mask_track[:, 1:] = track[:, [0]]
         return mask_track
 
-    def forward(self, vid, track, task_emb, p_img):
+    def forward(self, vid, track, task_emb, p_img, mode=None, **kwargs):
         """
         track: (b, tl, n, 2), which means current time step t0 -> t0 + tl
         vid: (b, t, c, h, w), which means the past time step t0 - t -> t0
         task_emb, (b, emb_size)
         """
-        assert torch.max(vid) <=1.
-        B, T, _, _ = track.shape
-        patches = self._encode_video(vid, p_img)  # (b, n_image, d)
-        enc_track = self._encode_track(track)
+        if mode == "loss":
+            return self.forward_loss(vid, track, task_emb, p_img=p_img, **kwargs)
+        elif mode == "vis":
+            return self.forward_vis(vid, track, task_emb, p_img)
+        else:
+            assert torch.max(vid) <=1.
+            B, T, _, _ = track.shape
+            patches = self._encode_video(vid, p_img)  # (b, n_image, d)
+            enc_track = self._encode_track(track)
 
-        text_encoded = self.language_encoder(task_emb)  # (b, c)
-        text_encoded = rearrange(text_encoded, 'b c -> b 1 c')
+            text_encoded = self.language_encoder(task_emb)  # (b, c)
+            text_encoded = rearrange(text_encoded, 'b c -> b 1 c')
 
-        x = torch.cat([enc_track, patches, text_encoded], dim=1)
-        x = self.transformer(x)
+            x = torch.cat([enc_track, patches, text_encoded], dim=1)
+            x = self.transformer(x)
 
-        rec_track, rec_patches = x[:, :self.num_track_patches], x[:, self.num_track_patches:-1]
-        rec_patches = self.img_decoder(rec_patches)  # (b, n_image, 3 * t * patch_size ** 2)
-        rec_track = self.track_decoder(rec_track)  # (b, (t n), 2 * patch_size)
-        num_track_h = self.num_track_ts // self.track_patch_size
-        rec_track = rearrange(rec_track, 'b (t n) (p c) -> b (t p) n c', p=self.track_patch_size, t=num_track_h)
+            rec_track, rec_patches = x[:, :self.num_track_patches], x[:, self.num_track_patches:-1]
+            rec_patches = self.img_decoder(rec_patches)  # (b, n_image, 3 * t * patch_size ** 2)
+            rec_track = self.track_decoder(rec_track)  # (b, (t n), 2 * patch_size)
+            num_track_h = self.num_track_ts // self.track_patch_size
+            rec_track = rearrange(rec_track, 'b (t n) (p c) -> b (t p) n c', p=self.track_patch_size, t=num_track_h)
 
-        return rec_track, rec_patches
+            return rec_track, rec_patches
 
     def reconstruct(self, vid, track, task_emb, p_img):
         """
