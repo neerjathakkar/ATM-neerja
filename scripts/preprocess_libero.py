@@ -45,6 +45,12 @@ def get_task_embs(cfg, descriptions):
         model = AutoModel.from_pretrained(
             "bert-base-cased", cache_dir=to_absolute_path("./data/bert")
         )
+        # Debugging: Check if descriptions is empty
+        if not descriptions:
+            raise ValueError("Descriptions list is empty. Cannot generate embeddings.")
+        
+        print(f"Descriptions: {descriptions}")  # Debugging: Print descriptions
+
         tokens = tz(
             text=descriptions,  # the sentence to be encoded
             add_special_tokens=True,  # Add [CLS] and [SEP]
@@ -53,6 +59,10 @@ def get_task_embs(cfg, descriptions):
             return_attention_mask=True,  # Generate the attention mask
             return_tensors="pt",  # ask the function to return PyTorch tensors
         )
+        # Debugging: Check if tokens are generated
+        if not tokens["input_ids"]:
+            raise ValueError("Tokenization failed. No tokens generated.")
+        
         masks = tokens["attention_mask"]
         input_ids = tokens["input_ids"]
         task_embs = model(tokens["input_ids"], tokens["attention_mask"])[
@@ -66,8 +76,10 @@ def get_task_embs(cfg, descriptions):
 
 def get_task_bert_embs(libero_root_dir):
     libero_h5_files = glob(os.path.join(libero_root_dir, "*/*.hdf5"))
+    print(f"Libero H5 files: {libero_h5_files}")  # Debugging: Print libero H5 files
     task_names = set([get_task_name_from_file_name(os.path.basename(file).split('.')[0]) for file in libero_h5_files])
     task_names = list(task_names)
+    print(f"Task names: {task_names}")  # Debugging: Print task names
 
     if not os.path.exists("libero/task_embedding_caches/task_emb_bert.npy"):
         # set the task embeddings
@@ -265,7 +277,10 @@ def main(root, save, suite, skip_exist):
     suite_dir = os.path.join(root, suite)
 
     # setup cotracker
-    cotracker = torch.hub.load(os.path.join(os.path.expanduser("~"), ".cache/torch/hub/facebookresearch_co-tracker_main/"), "cotracker2", source="local")
+    # cotracker = torch.hub.load(os.path.join(os.path.expanduser("~"), ".cache/torch/hub/facebookresearch_co-tracker_main/"), "cotracker2", source="local")
+    # cotracker = torch.hub.load("facebookresearch/co-tracker", "cotracker2")
+    cotracker = torch.hub.load("facebookresearch/co-tracker", "cotracker3_offline")
+
     cotracker = cotracker.eval().cuda()
 
     # load task name embeddings

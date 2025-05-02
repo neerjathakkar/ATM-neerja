@@ -289,6 +289,7 @@ class MammalNetDataset(Dataset):
         
         return frames, (orig_width, orig_height)
   
+    # TODO this does not work
     def _sample_tracks_random(self, tracks, visibility, num_timesteps, num_points):
         # import ipdb; ipdb.set_trace()
         # tracks: [num_points, num_frames, 2]
@@ -300,23 +301,24 @@ class MammalNetDataset(Dataset):
         
         # Sample in time - Ensure we have enough points to sample a contiguous chunk
         max_start_idx = tracks.shape[1] - num_timesteps
-        if max_start_idx < 0:
-            # Not enough points, so we'll just use all available and repeat the last one
-            start_idx = 0
-            end_idx = tracks.shape[1]
-            selected_indices_timesteps = torch.arange(start_idx, end_idx)
-            # Pad with repetitions of the last index if needed
-            if len(selected_indices_timesteps) < num_timesteps:
-                padding = torch.full((num_timesteps - len(selected_indices_timesteps),), end_idx - 1, 
-                                    dtype=torch.long, device=selected_indices_timesteps.device)
-                selected_indices_timesteps = torch.cat([selected_indices_timesteps, padding])
-        else:
-            # Randomly select a starting point and take num_samples consecutive indices
-            start_idx = torch.randint(0, max_start_idx + 1, (1,)).item()
-            print("selected start idx", start_idx)
-            end_idx = start_idx + num_timesteps
-            print("end idx", end_idx)
-            selected_indices_timesteps = torch.arange(start_idx, end_idx)
+        # if max_start_idx < 0:
+        #     # Not enough points, so we'll just use all available and repeat the last one
+        #     start_idx = 0
+        #     end_idx = tracks.shape[1]
+        #     selected_indices_timesteps = torch.arange(start_idx, end_idx)
+        #     # Pad with repetitions of the last index if needed
+        #     if len(selected_indices_timesteps) < num_timesteps:
+        #         padding = torch.full((num_timesteps - len(selected_indices_timesteps),), end_idx - 1, 
+        #                             dtype=torch.long, device=selected_indices_timesteps.device)
+        #         selected_indices_timesteps = torch.cat([selected_indices_timesteps, padding])
+        # else:
+        # Randomly select a starting point and take num_samples consecutive indices
+        start_idx = torch.randint(0, max_start_idx + 1, (1,)).item()
+        print("selected start idx", start_idx)
+        end_idx = start_idx + num_timesteps
+        print("end idx", end_idx)
+        selected_indices_timesteps = torch.arange(start_idx, end_idx)
+        
         sampled_tracks_timesteps = tracks[:, selected_indices_timesteps]
         sampled_visibility_timesteps = visibility[:, selected_indices_timesteps]
         print("sampled tracks timesteps shape", sampled_tracks_timesteps.shape)
@@ -449,7 +451,6 @@ class MammalNetDataset(Dataset):
             task_emb = demo['task_emb']
             
         else:
-            # import ipdb; ipdb.set_trace()
             # Load data directly from files
             track_file = self._demo_id_to_path[demo_id]
             
@@ -470,8 +471,8 @@ class MammalNetDataset(Dataset):
             visibility = track_data['animal_visibles'][animal_id]
 
             # normalize tracks
-            # tracks[:, :, 0] = tracks[:, :, 0] / orig_width
-            # tracks[:, :, 1] = tracks[:, :, 1] / orig_height
+            tracks[:, :, 0] = tracks[:, :, 0] / orig_width
+            tracks[:, :, 1] = tracks[:, :, 1] / orig_height
         
             # # Pad tracks and visibility if needed
             # if len(tracks) < self.num_track_ts:
@@ -502,7 +503,9 @@ class MammalNetDataset(Dataset):
         
         # Sample tracks to get the required number of track points
         # tracks, visibility, selected_indices = self._sample_tracks_random(tracks, visibility, self.num_track_ts, self.num_track_ids)
-        selected_indices = torch.arange(global_shot[0], global_shot[1])
+        tracks = tracks[:self.num_track_ids, :self.num_track_ts, :]
+        visibility = visibility[:self.num_track_ids, :self.num_track_ts]
+        selected_indices = torch.arange(global_shot[0], global_shot[0] + self.num_track_ts)
         
         return {
             'video': vids,
@@ -605,8 +608,8 @@ if __name__ == "__main__":
 
     print("unnormalizing tracks")
     # unnormalize tracks
-    # tracks[:, :, 0] = tracks[:, :, 0] * video_width
-    # tracks[:, :, 1] = tracks[:, :, 1] * video_height
+    tracks[:, :, 0] = tracks[:, :, 0] * video_width
+    tracks[:, :, 1] = tracks[:, :, 1] * video_height
     # convert to numpy
     if not isinstance(tracks, np.ndarray):
         tracks = tracks.numpy()
