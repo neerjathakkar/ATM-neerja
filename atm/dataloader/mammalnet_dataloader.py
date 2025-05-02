@@ -8,6 +8,109 @@ from natsort import natsorted
 import cv2
 from einops import rearrange
 import torchvision.transforms as transforms
+   
+
+import matplotlib.pyplot as plt
+import mediapy as media
+import colorsys
+import random
+from typing import List, Tuple, Optional
+
+
+# Generate random colormaps for visualizing different points.
+def get_colors(num_colors: int) -> List[Tuple[int, int, int]]:
+  """Gets colormap for points."""
+  colors = []
+  for i in np.arange(0.0, 360.0, 360.0 / num_colors):
+    hue = i / 360.0
+    lightness = (50 + np.random.rand() * 10) / 100.0
+    saturation = (90 + np.random.rand() * 10) / 100.0
+    color = colorsys.hls_to_rgb(hue, lightness, saturation)
+    colors.append(
+        (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
+    )
+  random.shuffle(colors)
+  return colors
+
+
+def paint_point_track(
+    frames: np.ndarray,
+    point_tracks: np.ndarray,
+    visibles: np.ndarray,
+    colormap: Optional[List[Tuple[int, int, int]]] = None,
+) -> np.ndarray:
+  """Converts a sequence of points to color code video.
+
+  Args:
+    frames: [num_frames, height, width, 3], np.uint8, [0, 255]
+    point_tracks: [num_points, num_frames, 2], np.float32, [0, width / height]
+    visibles: [num_points, num_frames], bool
+    colormap: colormap for points, each point has a different RGB color.
+
+  Returns:
+    video: [num_frames, height, width, 3], np.uint8, [0, 255]
+  """
+  num_points, num_frames = point_tracks.shape[0:2]
+  if colormap is None:
+    colormap = get_colors(num_colors=num_points)
+  height, width = frames.shape[1:3]
+  dot_size_as_fraction_of_min_edge = 0.015
+  radius = int(round(min(height, width) * dot_size_as_fraction_of_min_edge))
+  diam = radius * 2 + 1
+  quadratic_y = np.square(np.arange(diam)[:, np.newaxis] - radius - 1)
+  quadratic_x = np.square(np.arange(diam)[np.newaxis, :] - radius - 1)
+  icon = (quadratic_y + quadratic_x) - (radius**2) / 2.0
+  sharpness = 0.15
+  icon = np.clip(icon / (radius * 2 * sharpness), 0, 1)
+  icon = 1 - icon[:, :, np.newaxis]
+  icon1 = np.pad(icon, [(0, 1), (0, 1), (0, 0)])
+  icon2 = np.pad(icon, [(1, 0), (0, 1), (0, 0)])
+  icon3 = np.pad(icon, [(0, 1), (1, 0), (0, 0)])
+  icon4 = np.pad(icon, [(1, 0), (1, 0), (0, 0)])
+
+  video = frames.copy()
+  for t in range(num_frames):
+    # Pad so that points that extend outside the image frame don't crash us
+    image = np.pad(
+        video[t],
+        [
+            (radius + 1, radius + 1),
+            (radius + 1, radius + 1),
+            (0, 0),
+        ],
+    )
+    for i in range(num_points):
+      # The icon is centered at the center of a pixel, but the input coordinates
+      # are raster coordinates.  Therefore, to render a point at (1,1) (which
+      # lies on the corner between four pixels), we need 1/4 of the icon placed
+      # centered on the 0'th row, 0'th column, etc.  We need to subtract
+      # 0.5 to make the fractional position come out right.
+      x, y = point_tracks[i, t, :] + 0.5
+      x = min(max(x, 0.0), width)
+      y = min(max(y, 0.0), height)
+
+      if visibles[i, t]:
+        x1, y1 = np.floor(x).astype(np.int32), np.floor(y).astype(np.int32)
+        x2, y2 = x1 + 1, y1 + 1
+
+        # bilinear interpolation
+        patch = (
+            icon1 * (x2 - x) * (y2 - y)
+            + icon2 * (x2 - x) * (y - y1)
+            + icon3 * (x - x1) * (y2 - y)
+            + icon4 * (x - x1) * (y - y1)
+        )
+        x_ub = x1 + 2 * radius + 2
+        y_ub = y1 + 2 * radius + 2
+        image[y1:y_ub, x1:x_ub, :] = (1 - patch) * image[
+            y1:y_ub, x1:x_ub, :
+        ] + patch * np.array(colormap[i])[np.newaxis, np.newaxis, :]
+
+      # Remove the pad
+      video[t] = image[
+          radius + 1 : -radius - 1, radius + 1 : -radius - 1
+      ].astype(np.uint8)
+  return video
 
 class MammalNetDataset(Dataset):
     def __init__(self,
@@ -156,6 +259,10 @@ class MammalNetDataset(Dataset):
         cap = cv2.VideoCapture(video_path)
         frames = []
         
+        # Get original width and height
+        orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
         # Seek to start frame
         cap.set(cv2.CAP_PROP_POS_FRAMES, global_shot[0])
         
@@ -180,15 +287,45 @@ class MammalNetDataset(Dataset):
         frames = rearrange(frames, "t h w c -> t c h w")
         frames = torch.from_numpy(frames).float()
         
-        return frames
-    
+        return frames, (orig_width, orig_height)
   
-    def _sample_tracks_random(self, tracks, visibility, num_samples):
-        selected_indices = torch.randint(0, tracks.shape[1], (num_samples,))
-        sampled_tracks = tracks[:, selected_indices]
-        sampled_visibility = visibility[:, selected_indices]
+    def _sample_tracks_random(self, tracks, visibility, num_timesteps, num_points):
+        # import ipdb; ipdb.set_trace()
+        # tracks: [num_points, num_frames, 2]
+        # visibility: [num_points, num_frames]
+        if isinstance(tracks, np.ndarray):
+            tracks = torch.from_numpy(tracks).float()
+        if isinstance(visibility, np.ndarray):
+            visibility = torch.from_numpy(visibility).float()
         
-        return sampled_tracks, sampled_visibility# Get track information for the specific animal
+        # Sample in time - Ensure we have enough points to sample a contiguous chunk
+        max_start_idx = tracks.shape[1] - num_timesteps
+        if max_start_idx < 0:
+            # Not enough points, so we'll just use all available and repeat the last one
+            start_idx = 0
+            end_idx = tracks.shape[1]
+            selected_indices_timesteps = torch.arange(start_idx, end_idx)
+            # Pad with repetitions of the last index if needed
+            if len(selected_indices_timesteps) < num_timesteps:
+                padding = torch.full((num_timesteps - len(selected_indices_timesteps),), end_idx - 1, 
+                                    dtype=torch.long, device=selected_indices_timesteps.device)
+                selected_indices_timesteps = torch.cat([selected_indices_timesteps, padding])
+        else:
+            # Randomly select a starting point and take num_samples consecutive indices
+            start_idx = torch.randint(0, max_start_idx + 1, (1,)).item()
+            print("selected start idx", start_idx)
+            end_idx = start_idx + num_timesteps
+            print("end idx", end_idx)
+            selected_indices_timesteps = torch.arange(start_idx, end_idx)
+        sampled_tracks_timesteps = tracks[:, selected_indices_timesteps]
+        sampled_visibility_timesteps = visibility[:, selected_indices_timesteps]
+        print("sampled tracks timesteps shape", sampled_tracks_timesteps.shape)
+        # sample num_points points
+        selected_indices = torch.randint(0, tracks.shape[0], (num_points,))
+        sampled_tracks = sampled_tracks_timesteps[selected_indices]
+        sampled_visibility = sampled_visibility_timesteps[selected_indices]
+        print("sampled tracks shape", sampled_tracks.shape)
+        return sampled_tracks, sampled_visibility, selected_indices_timesteps
     
     def _sample_tracks(self, tracks, visibility, num_samples):
         """
@@ -326,11 +463,15 @@ class MammalNetDataset(Dataset):
 
             global_shot = track_data['frame_range']
             # Load video frames
-            vids = self._load_all_video_frames(video_path, global_shot)
+            vids, (orig_width, orig_height) = self._load_all_video_frames(video_path, global_shot)
             
             # Get track information
-            tracks = track_data['animal_tracks'][animal_id][time_offset:time_offset + self.num_track_ts]
-            visibility = track_data['animal_visibles'][animal_id][time_offset:time_offset + self.num_track_ts]
+            tracks = track_data['animal_tracks'][animal_id]
+            visibility = track_data['animal_visibles'][animal_id]
+
+            # normalize tracks
+            # tracks[:, :, 0] = tracks[:, :, 0] / orig_width
+            # tracks[:, :, 1] = tracks[:, :, 1] / orig_height
         
             # # Pad tracks and visibility if needed
             # if len(tracks) < self.num_track_ts:
@@ -358,19 +499,56 @@ class MammalNetDataset(Dataset):
         #     vids = vids[0]  # Remove batch dimension
         #     tracks = tracks[0, 0]  # Remove batch dimension
         
+        
         # Sample tracks to get the required number of track points
-        tracks, visibility = self._sample_tracks_random(tracks, visibility, self.num_track_ids)
+        # tracks, visibility, selected_indices = self._sample_tracks_random(tracks, visibility, self.num_track_ts, self.num_track_ids)
+        selected_indices = torch.arange(global_shot[0], global_shot[1])
         
         return {
             'video': vids,
             'tracks': tracks, 
             'visibility': visibility,
-            'task_emb': task_emb
+            'task_emb': task_emb,
+            'track_file': track_file,
+            'animal_id': animal_id,
+            'shot_range': global_shot,
+            'selected_indices': selected_indices
         }
 
+def test_pkls():
+    video_dir = "/datasets/mammal_net/current/full_videos/"
+    track_dir = "/home/neerja/tapnet-neerja/lion_dt_animal_320_points_10_seconds_256x256/tracks"
+    for file in os.listdir(track_dir):
+        file = "0L7-8yqgMEo_chunk_0_tracks.pkl"
+        if file.endswith(".pkl"):
+            print(file)
+            track_file = os.path.join(track_dir, file)
+            with open(track_file, 'rb') as f:
+                track_data = pickle.load(f)
+            print(track_data.keys())
+        video_id = os.path.basename(track_file).split('.')[0].split('_')[0]
+        video_path = os.path.join(video_dir, f"{video_id}.mp4") 
+        print("reading video")
+        video = media.read_video(video_path)
+        print("read video")
+        for animal_id in track_data['valid_animals']:
+            print("painting track for animal", animal_id)
+            tracks = track_data['animal_tracks'][animal_id]
+            visibility = track_data['animal_visibles'][animal_id]
+            print("tracks shape", tracks.shape)
+            print("visibility shape", visibility.shape)
+            video_viz = paint_point_track(video, tracks, visibility)
+            print("painting done")
+            media.write_video(f"track_visualization/{video_id}_sanity_check.mp4", video_viz, fps=30, codec='libx264')
+            print("writing video to sanity check")
+            break
+        print("done")
+    
 if __name__ == "__main__":
+    # test_pkls()
+    video_dir = "/datasets/mammal_net/current/full_videos/"
     dataset = MammalNetDataset(tracks_dir="/home/neerja/tapnet-neerja/lion_dt_animal_320_points_10_seconds_256x256/tracks", 
-                               videos_dir="/datasets/mammal_net/current/full_videos/", 
+                               videos_dir=video_dir, 
                                img_size=(128, 128), 
                                num_track_ts=16, 
                                num_track_ids=32, 
@@ -380,5 +558,68 @@ if __name__ == "__main__":
                                num_demos=0.1, 
                                aug_prob=0.5)
     print(len(dataset))
-    print(dataset[0])
-    import ipdb; ipdb.set_trace()
+    # print(dataset[0])
+    video = dataset[0]['video']
+    tracks = dataset[0]['tracks']
+    visibility = dataset[0]['visibility']
+    task_emb = dataset[0]['task_emb']
+    shot_range = dataset[0]['shot_range']
+    track_file = dataset[0]['track_file']
+    selected_indices = dataset[0]['selected_indices']
+    start_idx = selected_indices[0]
+    end_idx = selected_indices[-1]
+    print(track_file)
+    print("selected indices", selected_indices)
+    print("shot range", shot_range)
+    print("tracks shape", tracks.shape)
+    print("visibility shape", visibility.shape)
+
+    # Create a directory to save the visualization
+    os.makedirs("track_visualization", exist_ok=True)
+
+    print("reading video")
+    video_id = os.path.basename(track_file).split('.')[0].split('_')[0]
+    video_path = os.path.join(video_dir, f"{video_id}.mp4") 
+    video = media.read_video(video_path)
+    # import ipdb; ipdb.set_trace()
+    # import ipdb; ipdb.set_trace()
+    # global_start = shot_range[0] + start_idx
+    # global_end = shot_range[0] + end_idx + 1
+    # video = video[global_start:global_end]
+    # print("global start and end", global_start, global_end)
+    # Get frames that correspond EXACTLY to the sampled track indices
+    # We need to map selected_indices to global video indices
+    # global_indices = [shot_range[0] + idx.item() for idx in selected_indices]
+    # video = video[global_indices]
+    # print(f"Using frames at global indices: {global_indices}")
+    global_start = shot_range[0] + selected_indices[0].item()
+    global_end = shot_range[0] + selected_indices[-1].item() + 1
+    video = video[global_start:global_end]
+    print(f"Using frames from {global_start} to {global_end}")
+    
+
+
+    # get video width and height
+    video_width = video.shape[2]
+    video_height = video.shape[1]
+
+    print("unnormalizing tracks")
+    # unnormalize tracks
+    # tracks[:, :, 0] = tracks[:, :, 0] * video_width
+    # tracks[:, :, 1] = tracks[:, :, 1] * video_height
+    # convert to numpy
+    if not isinstance(tracks, np.ndarray):
+        tracks = tracks.numpy()
+    if not isinstance(visibility, np.ndarray):
+        visibility = visibility.numpy()
+    # tracks_transposed = tracks.transpose(1, 0, 2)
+    # visibility_transposed = visibility.transpose(1, 0)
+
+    print(visibility)
+    print(selected_indices)
+
+
+
+    video = paint_point_track(video, tracks, visibility)
+    media.write_video(f"track_visualization/{video_id}_sampled_start_{selected_indices[0]}.mp4", video, fps=30, codec='libx264')
+   
