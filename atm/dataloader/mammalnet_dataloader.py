@@ -256,30 +256,52 @@ class MammalNetDataset(Dataset):
     
     def _load_all_video_frames(self, video_path, global_shot):
         """Load all frames from a video file between global_shot start and end frames"""
+        print("loading video frames from ", video_path)
+        print("global shot", global_shot)
         cap = cv2.VideoCapture(video_path)
         frames = []
-        
         # Get original width and height
         orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
+        # Check if video opened successfully
+        if not cap.isOpened():
+            raise ValueError(f"Failed to open video file: {video_path}")
+        
         # Seek to start frame
-        cap.set(cv2.CAP_PROP_POS_FRAMES, global_shot[0])
+        if not cap.set(cv2.CAP_PROP_POS_FRAMES, global_shot[0]):
+            raise ValueError(f"Failed to seek to frame {global_shot[0]} in video: {video_path}")
         
         # Read frames until end frame
-        for _ in range(global_shot[1] - global_shot[0]):
+        frame_count = 0
+        expected_frames = global_shot[1] - global_shot[0]
+        
+        for _ in range(expected_frames):
             ret, frame = cap.read()
             if not ret:
+                print(f"Warning: Could only read {frame_count}/{expected_frames} frames from {video_path}")
                 break
                 
-            # Convert BGR to RGB
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Resize if needed
-            if frame.shape[0] != self.img_size[0] or frame.shape[1] != self.img_size[1]:
-                frame = cv2.resize(frame, self.img_size, interpolation=cv2.INTER_AREA)
-            
-            frames.append(frame)
+            try:
+                # Convert BGR to RGB
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Resize if needed
+                if frame.shape[0] != self.img_size[0] or frame.shape[1] != self.img_size[1]:
+                    frame = cv2.resize(frame, self.img_size, interpolation=cv2.INTER_AREA)
+                
+                frames.append(frame)
+                frame_count += 1
+            except Exception as e:
+                print(f"Error processing frame {global_shot[0] + frame_count}: {str(e)}")
+                continue
+        
+        if frame_count == 0:
+            raise ValueError(f"Failed to read any frames from {video_path} between {global_shot[0]} and {global_shot[1]}")
+        
+        if frame_count < expected_frames:
+            print(f"Warning: Expected {expected_frames} frames but got {frame_count} from {video_path}")
+        print(f"got {len(frames)} frames")
         
         cap.release()
         # Convert frames to tensor with shape (t, c, h, w)
@@ -489,7 +511,7 @@ class MammalNetDataset(Dataset):
             
             # Get task embedding
             # task_emb = track_data.get('task_emb', np.zeros(self.task_embedding_dim))
-            task_emb = None
+            task_emb = torch.zeros(self.task_embedding_dim)
         
         # Apply augmentation if needed
         # TODO - implement/fix this
@@ -504,7 +526,10 @@ class MammalNetDataset(Dataset):
         # Sample tracks to get the required number of track points
         # tracks, visibility, selected_indices = self._sample_tracks_random(tracks, visibility, self.num_track_ts, self.num_track_ids)
         tracks = tracks[:self.num_track_ids, :self.num_track_ts, :]
+        # tracks = rearrange(tracks, 'n t 2 -> t n 2')
+        tracks = np.transpose(tracks, (1, 0, 2))
         visibility = visibility[:self.num_track_ids, :self.num_track_ts]
+        visibility = np.transpose(visibility, (1, 0))
         selected_indices = torch.arange(global_shot[0], global_shot[0] + self.num_track_ts)
         
         return {
@@ -607,6 +632,7 @@ if __name__ == "__main__":
     video_height = video.shape[1]
 
     print("unnormalizing tracks")
+    
     # unnormalize tracks
     tracks[:, :, 0] = tracks[:, :, 0] * video_width
     tracks[:, :, 1] = tracks[:, :, 1] * video_height
@@ -615,6 +641,8 @@ if __name__ == "__main__":
         tracks = tracks.numpy()
     if not isinstance(visibility, np.ndarray):
         visibility = visibility.numpy()
+    tracks = np.transpose(tracks, (1, 0, 2))
+    visibility = np.transpose(visibility, (1, 0))
     # tracks_transposed = tracks.transpose(1, 0, 2)
     # visibility_transposed = visibility.transpose(1, 0)
 
@@ -624,5 +652,5 @@ if __name__ == "__main__":
 
 
     video = paint_point_track(video, tracks, visibility)
-    media.write_video(f"track_visualization/{video_id}_sampled_start_{selected_indices[0]}.mp4", video, fps=30, codec='libx264')
+    media.write_video(f"track_visualization/{video_id}_rearranged_tracks_sampled_start_{selected_indices[0]}.mp4", video, fps=30, codec='libx264')
    
