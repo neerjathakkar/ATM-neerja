@@ -8,6 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import lightning
 from lightning.fabric import Fabric
+import numpy as np
 
 from atm.model import *
 from atm.dataloader import MammalNetDataset, get_dataloader
@@ -28,17 +29,25 @@ def main(cfg: DictConfig):
 
     # train_dataset = MammalNetDataset(dataset_dir=cfg.train_dataset, **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
     train_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
+    if cfg.overfit_test:
+        train_dataset = torch.utils.data.Subset(train_dataset, indices=[0])
     train_loader = get_dataloader(train_dataset, mode="train", num_workers=cfg.num_workers, batch_size=cfg.batch_size)
 
     train_vis_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
+    if cfg.overfit_test:
+        train_vis_dataset = torch.utils.data.Subset(train_vis_dataset, indices=[0])
     train_vis_dataloader = get_dataloader(train_vis_dataset, mode="train", num_workers=1, batch_size=1)
 
     # val_dataset = MammalNetDataset(dataset_dir=cfg.val_dataset, **cfg.dataset_cfg, aug_prob=0.)
     val_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=0.)
+    if cfg.overfit_test:
+        val_dataset = torch.utils.data.Subset(val_dataset, indices=[0])
     val_loader = get_dataloader(val_dataset, mode="val", num_workers=cfg.num_workers, batch_size=cfg.batch_size * 2)
 
     # val_vis_dataset = MammalNetDataset(dataset_dir=cfg.val_dataset, vis=True, **cfg.dataset_cfg, aug_prob=0.)
     val_vis_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=0.)
+    if cfg.overfit_test:
+        val_vis_dataset = torch.utils.data.Subset(val_vis_dataset, indices=[0])
     val_vis_dataloader = get_dataloader(val_vis_dataset, mode="val", num_workers=1, batch_size=1)
 
     model_cls = eval(cfg.model_name)
@@ -112,11 +121,29 @@ def main(cfg: DictConfig):
                     vis_dict = visualize(model, vis_dataloader, mix_precision=cfg.mix_precision)
 
                     caption = f"reconstruction (right) @ epoch {epoch}; \n Track MSE: {vis_dict['track_loss']:.4f}"
-                    wandb_vis_track = wandb.Video(vis_dict["combined_track_vid"], fps=10, format="mp4", caption=caption)
-                    None if cfg.dry else wandb.log({f"{mode}/reconstruct_track": wandb_vis_track}, step=epoch)
+                    # Save video to local log folder
+                    import os
+                    import cv2
+                    log_dir = os.path.join(work_dir, "visualizations")
+                    os.makedirs(log_dir, exist_ok=True)
+                    video_path = os.path.join(log_dir, f"{mode}_reconstruct_track_epoch_{epoch}.mp4")
+                    
+                    # Save the video locally
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    # import ipdb; ipdb.set_trace()
+                    frames, c, h, w = vis_dict["combined_track_vid"][0].shape
+                    video_writer = cv2.VideoWriter(video_path, fourcc, 10, (w, h))
+                    for i in range(frames):
+                        frame = vis_dict["combined_track_vid"][0][i].transpose(1, 2, 0)  # Convert from (C,H,W) to (H,W,C)
+                        video_writer.write(cv2.cvtColor(frame.astype(np.uint8), cv2.COLOR_RGB2BGR))
+                    video_writer.release()
+                    print(f"Video saved to {video_path}")
+                    # Log to wandb
+                    # wandb_vis_track = wandb.Video(vis_dict["combined_track_vid"], fps=10, format="mp4", caption=caption)
+                    # None if cfg.dry else wandb.log({f"{mode}/reconstruct_track": wandb_vis_track}, step=epoch)
 
-                # vis_and_log(model, train_vis_dataloader, mode="train")
-                # vis_and_log(model, val_vis_dataloader, mode="val")
+                vis_and_log(model, train_vis_dataloader, mode="train")
+                vis_and_log(model, val_vis_dataloader, mode="val")
 
     if fabric.is_global_zero:
         model.save(f"{work_dir}/model_final.ckpt")

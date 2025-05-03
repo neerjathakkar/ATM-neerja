@@ -32,7 +32,7 @@ root_dir = "./data/atm_libero/"
 #     val1_dataset_list = glob(os.path.join(root_dir, f"{suite_name}/*/val/"))
 train_dataset_list= None 
 val1_dataset_list= None
-EPOCH = 10
+EPOCH = 10000
 command = (f'python -m engine.train_track_transformer_mammalnet --config-name={CONFIG_NAME} '
            f'train_gpus="{gpu_ids}" '
            f'experiment={CONFIG_NAME}_ep{EPOCH} '
