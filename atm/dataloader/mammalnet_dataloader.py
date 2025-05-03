@@ -172,8 +172,104 @@ class MammalNetDataset(Dataset):
         
         # Initialize dataset indices
         self._build_indices()
-    
     def _build_indices(self):
+        """Build indices for the dataset"""
+        start_idx = 0
+        
+        for demo_idx, track_file in enumerate(self.track_files):
+            # Extract video ID from filename
+            # Extract video ID by removing the '_chunk_n_tracks' suffix
+            filename = os.path.basename(track_file).split('.')[0]
+            if '_chunk_' in filename:
+                # Find the position of '_chunk_' and extract everything before it
+                chunk_pos = filename.find('_chunk_')
+                video_id = filename[:chunk_pos]
+            else:
+                # Fallback to simple splitting if the expected pattern isn't found
+                video_id = filename.split('_')[0]
+            video_path = os.path.join(self.videos_dir, f"{video_id}{self.video_extension}")
+            # Load track data to get demo length
+            with open(track_file, 'rb') as f:
+                track_data = pickle.load(f)
+            # Get demo length from track data
+            global_shot = track_data['frame_range']
+            demo_len = global_shot[1] - global_shot[0]
+            
+            # Skip demos that are too short
+            if demo_len < self.num_track_ts:
+                print(f"Skipping demo {demo_idx} with length {demo_len} (less than {self.num_track_ts} frames)")
+                continue
+                    
+            effective_demo_len = max(0, demo_len - self.num_track_ts + 1)  # +1 since we can start at the last valid position
+            
+            # Process and cache demo if needed
+            if self.cache_all:
+                for animal_id in track_data['valid_animals']:
+                    processed_demo = self._process_demo(track_data, video_path, animal_id, global_shot)
+                    self._cache.append(processed_demo)
+            
+            # Dictionary to track valid segments per animal
+            valid_segments = {}
+            
+            # Check each animal and identify valid segments
+            for animal_id in track_data['valid_animals']:
+                # import ipdb; ipdb.set_trace()
+
+                within_mask = track_data['animal_tracks_within_seg'][animal_id]  # Shape (num_points, num_frames)
+                valid_segments[animal_id] = []
+                
+                # Check each possible segment
+                for segment_start in range(effective_demo_len):
+                    segment_end = segment_start + self.num_track_ts
+                    # Get visibility for this segment
+                    segment_visibles = within_mask[:, segment_start:segment_end]  # Shape (num_points, num_track_ts)
+                    # Count points visible in at least 1 frame in this segment
+                    valid_points_count = np.sum(np.sum(segment_visibles, axis=1) >= 1)
+                    
+                    if valid_points_count >= self.num_track_ids:
+                        valid_segments[animal_id].append(segment_start)
+                        
+            # Count total valid segments across all animals
+            total_valid_segments = sum(len(segments) for segments in valid_segments.values())
+            
+            if total_valid_segments == 0:
+                print(f"Skipping demo {demo_idx}: no valid segments found in any animal")
+                continue
+            
+            print(f"Processing demo {demo_idx} with {len(track_data['valid_animals'])} animals")
+            print(f"Demo length: {demo_len} frames, found {total_valid_segments} valid segments out of {effective_demo_len*len(track_data['valid_animals'])} possible segments")
+            
+            # Now build the indices based on valid segments
+            for animal_id, segments in valid_segments.items():
+                if not segments:  # Skip animals with no valid segments
+                    print(f"Animal {animal_id} in demo {demo_idx} has no valid segments, skipping")
+                    continue
+                    
+                print(f"Animal {animal_id} in demo {demo_idx} has {len(segments)} valid segments")
+                
+                # Store the starting index for this demo and animal
+                if demo_idx not in self._demo_id_to_start_indices:
+                    self._demo_id_to_start_indices[demo_idx] = {}
+                
+                self._demo_id_to_start_indices[demo_idx][animal_id] = start_idx
+                
+                # Map indices to demo, view, and animal
+                for segment_start in segments:
+                    self._index_to_demo_id[start_idx] = demo_idx
+                    self._index_to_view_id[start_idx] = segment_start
+                    self._index_to_animal_id[start_idx] = animal_id
+                    start_idx += 1
+                print(f"Stored start index {start_idx} for demo {demo_idx}, animal {animal_id}")
+            
+            # Store paths and lengths
+            self._demo_id_to_path[demo_idx] = track_file
+            self._demo_id_to_demo_length[demo_idx] = demo_len
+            
+            print(f"Updated start_idx to {start_idx}")
+        
+        self.total_samples = start_idx
+        print(f"Total samples after filtering: {self.total_samples}")
+    def _build_indices_old(self):
         """Build indices for the dataset"""
         start_idx = 0
         
@@ -269,6 +365,7 @@ class MammalNetDataset(Dataset):
         
         # Check if video opened successfully
         if not cap.isOpened():
+            import ipdb; ipdb.set_trace()
             raise ValueError(f"Failed to open video file: {video_path}")
         
         # Seek to start frame
@@ -431,9 +528,12 @@ class MammalNetDataset(Dataset):
         print("view id", view_id)
         animal_id = self._index_to_animal_id[index]
         animal_start_index = self._demo_id_to_start_indices[demo_id][animal_id]
+        path = self._demo_id_to_path[demo_id]
+        print("path", path)
         # import ipdb; ipdb.set_trace()
         # Calculate the time offset within the demo
-        time_offset = (index - animal_start_index) // 2
+        # time_offset = (index - animal_start_index) // 2
+        time_offset = view_id
         
         # TODO - implement/fix this
         if self.cache_all:
@@ -482,7 +582,14 @@ class MammalNetDataset(Dataset):
             track_file = self._demo_id_to_path[demo_id]
             
             # Extract video ID from filename
-            video_id = os.path.basename(track_file).split('.')[0].split('_')[0]
+            filename = os.path.basename(track_file).split('.')[0]
+            if '_chunk_' in filename:
+                # Find the position of '_chunk_' and extract everything before it
+                chunk_pos = filename.find('_chunk_')
+                video_id = filename[:chunk_pos]
+            else:
+                # Fallback to simple splitting if the expected pattern isn't found
+                video_id = filename.split('_')[0]
             video_path = os.path.join(self.videos_dir, f"{video_id}{self.video_extension}") 
             
             # Load track data
@@ -562,7 +669,14 @@ def test_pkls():
             with open(track_file, 'rb') as f:
                 track_data = pickle.load(f)
             print(track_data.keys())
-        video_id = os.path.basename(track_file).split('.')[0].split('_')[0]
+        filename = os.path.basename(track_file).split('.')[0]
+        if '_chunk_' in filename:
+            # Find the position of '_chunk_' and extract everything before it
+            chunk_pos = filename.find('_chunk_')
+            video_id = filename[:chunk_pos]
+        else:
+            # Fallback to simple splitting if the expected pattern isn't found
+            video_id = filename.split('_')[0]
         video_path = os.path.join(video_dir, f"{video_id}.mp4") 
         print("reading video")
         video = media.read_video(video_path)
@@ -629,7 +743,14 @@ if __name__ == "__main__":
 
         # Read the original video
         print("reading video")
-        video_id = os.path.basename(track_file).split('.')[0].split('_')[0]
+        filename = os.path.basename(track_file).split('.')[0]
+        if '_chunk_' in filename:
+            # Find the position of '_chunk_' and extract everything before it
+            chunk_pos = filename.find('_chunk_')
+            video_id = filename[:chunk_pos]
+        else:
+            # Fallback to simple splitting if the expected pattern isn't found
+            video_id = filename.split('_')[0]
         video_path = os.path.join(video_dir, f"{video_id}.mp4") 
         video = media.read_video(video_path)
         
@@ -659,23 +780,16 @@ if __name__ == "__main__":
         tracks = np.transpose(tracks, (1, 0, 2))
         visibility = np.transpose(visibility, (1, 0))
 
-        print(visibility)
-
         # Paint tracks on video and save
         video = paint_point_track(video, tracks, visibility)
         output_path = f"{output_dir}/{video_id}_index_{index}_rearranged_tracks_sampled_start_{frame_start}.mp4"
         media.write_video(output_path, video, fps=30, codec='libx264')
         
         return output_path
-    
+
+    for i in range(0, 74000, 2000):
+        visualize_tracks(dataset, i, video_dir)
     # Example usage
-    # visualize_tracks(dataset, 0, video_dir)
-    # visualize_tracks(dataset, 30, video_dir)
-    # visualize_tracks(dataset, 60, video_dir)
-    # visualize_tracks(dataset, 90, video_dir)
-    # visualize_tracks(dataset, 120, video_dir)
-    visualize_tracks(dataset, 150, video_dir)
-    visualize_tracks(dataset, 180, video_dir)
-    visualize_tracks(dataset, 210, video_dir)
-    visualize_tracks(dataset, 240, video_dir)
+    # visualize_tracks(dataset, 38000, video_dir)
+  
     
