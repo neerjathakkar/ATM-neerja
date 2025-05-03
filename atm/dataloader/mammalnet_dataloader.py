@@ -176,7 +176,6 @@ class MammalNetDataset(Dataset):
     def _build_indices(self):
         """Build indices for the dataset"""
         start_idx = 0
-        num_views = 1  # 1 per frame
         
         for demo_idx, track_file in enumerate(self.track_files):
             # Extract video ID from filename
@@ -185,11 +184,17 @@ class MammalNetDataset(Dataset):
             # Load track data to get demo length
             with open(track_file, 'rb') as f:
                 track_data = pickle.load(f)
-
             # Get demo length from track data
             # Assuming tracks are stored with shape (frames, num_points, 2)
             global_shot = track_data['frame_range']
             demo_len = global_shot[1] - global_shot[0]
+            
+            # Skip demos that are too short
+            if demo_len < self.num_track_ts:
+                print(f"Skipping demo {demo_idx} with length {demo_len} (less than {self.num_track_ts} frames)")
+                continue
+                
+            effective_demo_len = max(0, demo_len - self.num_track_ts)
 
             num_valid_animals = len(track_data['valid_animals'])
             
@@ -204,15 +209,15 @@ class MammalNetDataset(Dataset):
             print(f"Demo length: {demo_len} frames")
             
             for animal_idx, animal_id in enumerate(track_data['valid_animals']):
-                animal_start_idx = start_idx + animal_idx * demo_len * num_views
-                animal_end_idx = animal_start_idx + demo_len * num_views
+                animal_start_idx = start_idx + animal_idx * effective_demo_len 
+                animal_end_idx = animal_start_idx + effective_demo_len 
                 
                 print(f"Animal {animal_id} (idx {animal_idx}): indices {animal_start_idx} to {animal_end_idx}")
                 
                 # Map indices to demo and animal
                 for k in range(animal_start_idx, animal_end_idx):
                     self._index_to_demo_id[k] = demo_idx
-                    self._index_to_view_id[k] = (k - animal_start_idx) % num_views
+                    self._index_to_view_id[k] = (k - animal_start_idx)  
                     self._index_to_animal_id[k] = animal_id
                 
                 # Store the starting index for this demo and animal
@@ -229,7 +234,7 @@ class MammalNetDataset(Dataset):
             print(f"Updated demo {demo_idx} path and length")
             
             # Update the global index counter
-            start_idx += demo_len * num_views * num_valid_animals
+            start_idx += effective_demo_len * num_valid_animals
             print(f"New start_idx: {start_idx}")
             
         self.total_samples = start_idx
@@ -422,9 +427,11 @@ class MammalNetDataset(Dataset):
         """Get a sample from the dataset"""
         demo_id = self._index_to_demo_id[index]
         view_id = self._index_to_view_id[index]
+        print("dataloader index", index)
+        print("view id", view_id)
         animal_id = self._index_to_animal_id[index]
         animal_start_index = self._demo_id_to_start_indices[demo_id][animal_id]
-        
+        # import ipdb; ipdb.set_trace()
         # Calculate the time offset within the demo
         time_offset = (index - animal_start_index) // 2
         
@@ -523,12 +530,15 @@ class MammalNetDataset(Dataset):
         
         # Sample tracks to get the required number of track points
         # tracks, visibility, selected_indices = self._sample_tracks_random(tracks, visibility, self.num_track_ts, self.num_track_ids)
-        tracks = tracks[:self.num_track_ids, :self.num_track_ts, :]
+        # import ipdb; ipdb.set_trace()
+        tracks = tracks[:self.num_track_ids, view_id:view_id+self.num_track_ts, :]
+        # note: this g
+        # tracks = tracks[:self.num_track_ids, :self.num_track_ts, :]
         # tracks = rearrange(tracks, 'n t 2 -> t n 2')
         tracks = np.transpose(tracks, (1, 0, 2))
         visibility = visibility[:self.num_track_ids, :self.num_track_ts]
         visibility = np.transpose(visibility, (1, 0))
-        selected_indices = torch.arange(global_shot[0], global_shot[0] + self.num_track_ts)
+        # selected_indices = torch.arange(global_shot[0], global_shot[0] + self.num_track_ts)
         
         return {
             'video': vids,
@@ -538,7 +548,7 @@ class MammalNetDataset(Dataset):
             'track_file': track_file,
             'animal_id': animal_id,
             'shot_range': global_shot,
-            'selected_indices': selected_indices
+            'frame_start': view_id # TODO should this be view_id + global_shot[0]?
         }
 
 def test_pkls():
@@ -584,71 +594,88 @@ if __name__ == "__main__":
                                num_demos=0.1, 
                                aug_prob=0.5)
     print(len(dataset))
+    
     # print(dataset[0])
-    video = dataset[0]['video']
-    tracks = dataset[0]['tracks']
-    visibility = dataset[0]['visibility']
-    task_emb = dataset[0]['task_emb']
-    shot_range = dataset[0]['shot_range']
-    track_file = dataset[0]['track_file']
-    selected_indices = dataset[0]['selected_indices']
-    start_idx = selected_indices[0]
-    end_idx = selected_indices[-1]
-    print(track_file)
-    print("selected indices", selected_indices)
-    print("shot range", shot_range)
-    print("tracks shape", tracks.shape)
-    print("visibility shape", visibility.shape)
+    def visualize_tracks(dataset, index, video_dir, output_dir="track_visualization"):
+        """
+        Visualize tracks from a dataset sample
+        
+        Args:
+            dataset: The MammalNetDataset instance
+            index: Index of the sample to visualize
+            video_dir: Directory containing the videos
+            output_dir: Directory to save the visualization
+        """
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Get sample data
+        sample = dataset[index]
+        video = sample['video']
+        tracks = sample['tracks']
+        visibility = sample['visibility']
+        task_emb = sample['task_emb']
+        shot_range = sample['shot_range']
+        track_file = sample['track_file']
+        frame_start = sample['frame_start']
+        # selected_indices = sample['selected_indices']
+        num_track_ts = 16 
 
-    # Create a directory to save the visualization
-    os.makedirs("track_visualization", exist_ok=True)
+        print(track_file)
+        print("frame start", frame_start)
+        print("shot range", shot_range)
+        print("tracks shape", tracks.shape)
+        print("visibility shape", visibility.shape)
 
-    print("reading video")
-    video_id = os.path.basename(track_file).split('.')[0].split('_')[0]
-    video_path = os.path.join(video_dir, f"{video_id}.mp4") 
-    video = media.read_video(video_path)
-    # import ipdb; ipdb.set_trace()
-    # import ipdb; ipdb.set_trace()
-    # global_start = shot_range[0] + start_idx
-    # global_end = shot_range[0] + end_idx + 1
-    # video = video[global_start:global_end]
-    # print("global start and end", global_start, global_end)
-    # Get frames that correspond EXACTLY to the sampled track indices
-    # We need to map selected_indices to global video indices
-    # global_indices = [shot_range[0] + idx.item() for idx in selected_indices]
-    # video = video[global_indices]
-    # print(f"Using frames at global indices: {global_indices}")
-    global_start = shot_range[0] + selected_indices[0].item()
-    global_end = shot_range[0] + selected_indices[-1].item() + 1
-    video = video[global_start:global_end]
-    print(f"Using frames from {global_start} to {global_end}")
+        # Read the original video
+        print("reading video")
+        video_id = os.path.basename(track_file).split('.')[0].split('_')[0]
+        video_path = os.path.join(video_dir, f"{video_id}.mp4") 
+        video = media.read_video(video_path)
+        
+        # Extract the relevant portion of the video
+        global_start = shot_range[0] + frame_start
+        global_end = global_start + num_track_ts
+        video = video[global_start:global_end]
+        print(f"Using frames from {global_start} to {global_end}")
+        
+        # Get video dimensions
+        video_width = video.shape[2]
+        video_height = video.shape[1]
+
+        print("unnormalizing tracks")
+        
+        # Unnormalize tracks to pixel coordinates
+        tracks[:, :, 0] = tracks[:, :, 0] * video_width
+        tracks[:, :, 1] = tracks[:, :, 1] * video_height
+        
+        # Convert to numpy if needed
+        if not isinstance(tracks, np.ndarray):
+            tracks = tracks.numpy()
+        if not isinstance(visibility, np.ndarray):
+            visibility = visibility.numpy()
+            
+        # Transpose to match expected format for paint_point_track
+        tracks = np.transpose(tracks, (1, 0, 2))
+        visibility = np.transpose(visibility, (1, 0))
+
+        print(visibility)
+
+        # Paint tracks on video and save
+        video = paint_point_track(video, tracks, visibility)
+        output_path = f"{output_dir}/{video_id}_index_{index}_rearranged_tracks_sampled_start_{frame_start}.mp4"
+        media.write_video(output_path, video, fps=30, codec='libx264')
+        
+        return output_path
     
-
-
-    # get video width and height
-    video_width = video.shape[2]
-    video_height = video.shape[1]
-
-    print("unnormalizing tracks")
+    # Example usage
+    # visualize_tracks(dataset, 0, video_dir)
+    # visualize_tracks(dataset, 30, video_dir)
+    # visualize_tracks(dataset, 60, video_dir)
+    # visualize_tracks(dataset, 90, video_dir)
+    # visualize_tracks(dataset, 120, video_dir)
+    visualize_tracks(dataset, 150, video_dir)
+    visualize_tracks(dataset, 180, video_dir)
+    visualize_tracks(dataset, 210, video_dir)
+    visualize_tracks(dataset, 240, video_dir)
     
-    # unnormalize tracks
-    tracks[:, :, 0] = tracks[:, :, 0] * video_width
-    tracks[:, :, 1] = tracks[:, :, 1] * video_height
-    # convert to numpy
-    if not isinstance(tracks, np.ndarray):
-        tracks = tracks.numpy()
-    if not isinstance(visibility, np.ndarray):
-        visibility = visibility.numpy()
-    tracks = np.transpose(tracks, (1, 0, 2))
-    visibility = np.transpose(visibility, (1, 0))
-    # tracks_transposed = tracks.transpose(1, 0, 2)
-    # visibility_transposed = visibility.transpose(1, 0)
-
-    print(visibility)
-    print(selected_indices)
-
-
-
-    video = paint_point_track(video, tracks, visibility)
-    media.write_video(f"track_visualization/{video_id}_rearranged_tracks_sampled_start_{selected_indices[0]}.mp4", video, fps=30, codec='libx264')
-   
