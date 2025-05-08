@@ -194,18 +194,21 @@ def tracks_to_binary_img(tracks, img_size):
     return img
 
 
-def tracks_to_video(tracks, img_size):
+# has a problem where summing tracks and clamping makes them white
+def tracks_to_video_old(tracks, img_size):
     """
     tracks: (B, T, N, 2), where each track is a sequence of (u, v) coordinates; u is width, v is height
     return: (B, C, H, W)
     """
     B, T, N, _ = tracks.shape
+    print("visualizing, tracks shape", tracks.shape)
     binary_vid = tracks_to_binary_img(tracks, img_size=img_size).float()  # b, t, c, h, w
     binary_vid[:, :, 0] = binary_vid[:, :, 1]
     binary_vid[:, :, 2] = binary_vid[:, :, 1]
 
     # Get blue to purple cmap
-    cmap = plt.get_cmap('coolwarm')
+    # cmap = plt.get_cmap('coolwarm')
+    cmap = plt.get_cmap('cool')
     cmap = cmap(1 / np.arange(T))[:T, :3][::-1]
     binary_vid = binary_vid.clone()
 
@@ -217,6 +220,42 @@ def tracks_to_video(tracks, img_size):
     # Overwride from the last frame
     track_vid = torch.sum(binary_vid, dim=1)
     track_vid[track_vid > 255] = 255
+    return track_vid
+
+def tracks_to_video(tracks, img_size):
+    """
+    tracks: (B, T, N, 2), where each track is a sequence of (u, v) coordinates; u is width, v is height
+    return: (B, C, H, W)
+    """
+    B, T, N, _ = tracks.shape
+    print("visualizing, tracks shape", tracks.shape)
+    
+    # Create empty output tensor
+    track_vid = torch.zeros((B, 3, img_size, img_size), device=tracks.device)
+    
+    # Get blue to purple cmap
+    cmap = plt.get_cmap('cool')  # 'cool' is blue to purple
+    cmap = cmap(np.linspace(0, 1, T))[:, :3]  # Properly sample the colormap
+    
+    # Process each time step separately, starting from the last frame (to have earlier frames on top)
+    for l in range(T):
+    # for l in range(T-1, -1, -1):
+        # Get binary image for this timestep only
+        current_tracks = tracks[:, l:l+1, :, :]  # (B, 1, N, 2)
+        binary_img = tracks_to_binary_img(current_tracks, img_size=img_size).float()  # (B, 1, 3, H, W)
+        binary_img = binary_img[:, 0]  # (B, 3, H, W)
+        
+        # Apply color for this timestep
+        colored_img = torch.zeros_like(binary_img)
+        colored_img[:, 0] = binary_img[:, 0] * cmap[l, 0] * 255
+        colored_img[:, 1] = binary_img[:, 0] * cmap[l, 1] * 255
+        colored_img[:, 2] = binary_img[:, 0] * cmap[l, 2] * 255
+        
+        track_vid = torch.maximum(track_vid, colored_img)
+        # # Alpha blending: only add new tracks where there are no existing tracks
+        # mask = (track_vid.sum(dim=1, keepdim=True) == 0).expand_as(track_vid)
+        # # track_vid = torch.where(mask, colored_img, track_vid)
+        # track_vid = torch.where(mask, alpha * colored_img + (1-alpha) * track_vid, track_vid)
     return track_vid
 
 def combine_track_and_img(track: torch.Tensor, vid: np.ndarray):
