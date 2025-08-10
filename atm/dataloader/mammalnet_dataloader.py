@@ -172,6 +172,7 @@ class MammalNetDataset(Dataset):
         
         # Initialize dataset indices
         self._build_indices()
+        
     def _build_indices(self):
         """Build indices for the dataset"""
         start_idx = 0
@@ -236,8 +237,8 @@ class MammalNetDataset(Dataset):
                 print(f"Skipping demo {demo_idx}: no valid segments found in any animal")
                 continue
             
-            print(f"Processing demo {demo_idx} with {len(track_data['valid_animals'])} animals")
-            print(f"Demo length: {demo_len} frames, found {total_valid_segments} valid segments out of {effective_demo_len*len(track_data['valid_animals'])} possible segments")
+            # print(f"Processing demo {demo_idx} with {len(track_data['valid_animals'])} animals")
+            # print(f"Demo length: {demo_len} frames, found {total_valid_segments} valid segments out of {effective_demo_len*len(track_data['valid_animals'])} possible segments")
             
             # Now build the indices based on valid segments
             for animal_id, segments in valid_segments.items():
@@ -245,7 +246,7 @@ class MammalNetDataset(Dataset):
                     print(f"Animal {animal_id} in demo {demo_idx} has no valid segments, skipping")
                     continue
                     
-                print(f"Animal {animal_id} in demo {demo_idx} has {len(segments)} valid segments")
+                # print(f"Animal {animal_id} in demo {demo_idx} has {len(segments)} valid segments")
                 
                 # Store the starting index for this demo and animal
                 if demo_idx not in self._demo_id_to_start_indices:
@@ -259,16 +260,16 @@ class MammalNetDataset(Dataset):
                     self._index_to_view_id[start_idx] = segment_start
                     self._index_to_animal_id[start_idx] = animal_id
                     start_idx += 1
-                print(f"Stored start index {start_idx} for demo {demo_idx}, animal {animal_id}")
+                # print(f"Stored start index {start_idx} for demo {demo_idx}, animal {animal_id}")
             
             # Store paths and lengths
             self._demo_id_to_path[demo_idx] = track_file
             self._demo_id_to_demo_length[demo_idx] = demo_len
             
-            print(f"Updated start_idx to {start_idx}")
+            # print(f"Updated start_idx to {start_idx}")
         
         self.total_samples = start_idx
-        print(f"Total samples after filtering: {self.total_samples}")
+        # print(f"Total samples after filtering: {self.total_samples}")
     def _build_indices_old(self):
         """Build indices for the dataset"""
         start_idx = 0
@@ -301,14 +302,14 @@ class MammalNetDataset(Dataset):
                     self._cache.append(processed_demo)
             
             # Store indices for each animal in this demo
-            print(f"Processing demo {demo_idx} with {num_valid_animals} valid animals")
-            print(f"Demo length: {demo_len} frames")
+            # print(f"Processing demo {demo_idx} with {num_valid_animals} valid animals")
+            # print(f"Demo length: {demo_len} frames")
             
             for animal_idx, animal_id in enumerate(track_data['valid_animals']):
                 animal_start_idx = start_idx + animal_idx * effective_demo_len 
                 animal_end_idx = animal_start_idx + effective_demo_len 
                 
-                print(f"Animal {animal_id} (idx {animal_idx}): indices {animal_start_idx} to {animal_end_idx}")
+                # print(f"Animal {animal_id} (idx {animal_idx}): indices {animal_start_idx} to {animal_end_idx}")
                 
                 # Map indices to demo and animal
                 for k in range(animal_start_idx, animal_end_idx):
@@ -321,20 +322,20 @@ class MammalNetDataset(Dataset):
                     self._demo_id_to_start_indices[demo_idx] = {}
                 self._demo_id_to_start_indices[demo_idx][animal_id] = animal_start_idx
                 
-                print(f"Stored start index {animal_start_idx} for demo {demo_idx}, animal {animal_id}")
+                # print(f"Stored start index {animal_start_idx} for demo {demo_idx}, animal {animal_id}")
             
             # Store paths and lengths
             self._demo_id_to_path[demo_idx] = track_file
             self._demo_id_to_demo_length[demo_idx] = demo_len
             
-            print(f"Updated demo {demo_idx} path and length")
+            # print(f"Updated demo {demo_idx} path and length")
             
             # Update the global index counter
             start_idx += effective_demo_len * num_valid_animals
-            print(f"New start_idx: {start_idx}")
+            # print(f"New start_idx: {start_idx}")
             
         self.total_samples = start_idx
-        print(f"Total samples: {self.total_samples}")
+        # print(f"Total samples: {self.total_samples}")
     
     def _process_demo(self, track_data, video_path, animal_id, global_shot):
         """Process demo data for caching"""
@@ -410,6 +411,63 @@ class MammalNetDataset(Dataset):
         frames = torch.from_numpy(frames).float()
         
         return frames, (orig_width, orig_height)
+
+        
+    def _load_selected_video_frames(self, video_path, start_idx, end_idx):
+        """Load all frames from a video file between start_idx and end_idx"""
+        cap = cv2.VideoCapture(video_path)
+        frames = []
+        # Get original width and height
+        orig_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        orig_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Check if video opened successfully
+        if not cap.isOpened():
+            import ipdb; ipdb.set_trace()
+            raise ValueError(f"Failed to open video file: {video_path}")
+        
+        # Seek to start frame
+        if not cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx):
+            raise ValueError(f"Failed to seek to frame {start_idx} in video: {video_path}")
+        
+        # Read frames until end frame
+        frame_count = 0
+        expected_frames = end_idx - start_idx
+        
+        for _ in range(expected_frames):
+            ret, frame = cap.read()
+            if not ret:
+                print(f"Warning: Could only read {frame_count}/{expected_frames} frames from {video_path}")
+                break
+                
+            try:
+                # Convert BGR to RGB
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Resize if needed
+                if frame.shape[0] != self.img_size[0] or frame.shape[1] != self.img_size[1]:
+                    frame = cv2.resize(frame, self.img_size, interpolation=cv2.INTER_AREA)
+                
+                frames.append(frame)
+                frame_count += 1
+            except Exception as e:
+                print(f"Error processing frame {start_idx + frame_count}: {str(e)}")
+                continue
+        
+        if frame_count == 0:
+            raise ValueError(f"Failed to read any frames from {video_path} between {start_idx} and {end_idx}")
+        
+        if frame_count < expected_frames:
+            print(f"Warning: Expected {expected_frames} frames but got {frame_count} from {video_path}")
+        # print(f"got {len(frames)} frames")
+        
+        cap.release()
+        # Convert frames to tensor with shape (t, c, h, w)
+        frames = np.stack(frames)  # (t, h, w, c)
+        frames = rearrange(frames, "t h w c -> t c h w")
+        frames = torch.from_numpy(frames).float()
+        
+        return frames, (orig_width, orig_height)
   
     # TODO this does not work
     def _sample_tracks_random(self, tracks, visibility, num_timesteps, num_points):
@@ -436,19 +494,19 @@ class MammalNetDataset(Dataset):
         # else:
         # Randomly select a starting point and take num_samples consecutive indices
         start_idx = torch.randint(0, max_start_idx + 1, (1,)).item()
-        print("selected start idx", start_idx)
+        # print("selected start idx", start_idx)
         end_idx = start_idx + num_timesteps
-        print("end idx", end_idx)
+        # print("end idx", end_idx)
         selected_indices_timesteps = torch.arange(start_idx, end_idx)
         
         sampled_tracks_timesteps = tracks[:, selected_indices_timesteps]
         sampled_visibility_timesteps = visibility[:, selected_indices_timesteps]
-        print("sampled tracks timesteps shape", sampled_tracks_timesteps.shape)
+        # print("sampled tracks timesteps shape", sampled_tracks_timesteps.shape)
         # sample num_points points
         selected_indices = torch.randint(0, tracks.shape[0], (num_points,))
         sampled_tracks = sampled_tracks_timesteps[selected_indices]
         sampled_visibility = sampled_visibility_timesteps[selected_indices]
-        print("sampled tracks shape", sampled_tracks.shape)
+        # print("sampled tracks shape", sampled_tracks.shape)
         return sampled_tracks, sampled_visibility, selected_indices_timesteps
     
     def _sample_tracks(self, tracks, visibility, num_samples):
@@ -524,12 +582,12 @@ class MammalNetDataset(Dataset):
         """Get a sample from the dataset"""
         demo_id = self._index_to_demo_id[index]
         view_id = self._index_to_view_id[index]
-        print("dataloader index", index)
-        print("view id", view_id)
+        # print("dataloader index", index)
+        # print("view id", view_id)
         animal_id = self._index_to_animal_id[index]
         animal_start_index = self._demo_id_to_start_indices[demo_id][animal_id]
         path = self._demo_id_to_path[demo_id]
-        print("path", path)
+        # print("path", path)
         # import ipdb; ipdb.set_trace()
         # Calculate the time offset within the demo
         # time_offset = (index - animal_start_index) // 2
@@ -597,12 +655,15 @@ class MammalNetDataset(Dataset):
                 track_data = pickle.load(f)
 
             global_shot = track_data['frame_range']
+            start_frame = view_id + global_shot[0]
+            end_frame = start_frame + self.num_track_ts
             # Load video frames
-            vids, (orig_width, orig_height) = self._load_all_video_frames(video_path, global_shot)
+            vids, (orig_width, orig_height) = self._load_selected_video_frames(video_path, start_frame, end_frame)
             
             # Get track information
             tracks = track_data['animal_tracks'][animal_id]
             visibility = track_data['animal_visibles'][animal_id]
+            within_seg = track_data['animal_tracks_within_seg'][animal_id]
 
             # normalize tracks
             tracks[:, :, 0] = tracks[:, :, 0] / orig_width
@@ -645,6 +706,7 @@ class MammalNetDataset(Dataset):
         tracks = np.transpose(tracks, (1, 0, 2))
         visibility = visibility[:self.num_track_ids, :self.num_track_ts]
         visibility = np.transpose(visibility, (1, 0))
+        within_seg = within_seg[:self.num_track_ids, :self.num_track_ts]
         # selected_indices = torch.arange(global_shot[0], global_shot[0] + self.num_track_ts)
         
         return {
@@ -655,7 +717,8 @@ class MammalNetDataset(Dataset):
             'track_file': track_file,
             'animal_id': animal_id,
             'shot_range': global_shot,
-            'frame_start': view_id # TODO should this be view_id + global_shot[0]?
+            'frame_start': view_id, # TODO should this be view_id + global_shot[0]?
+            'within_seg': within_seg
         }
 
 def test_pkls():
@@ -787,8 +850,11 @@ if __name__ == "__main__":
         
         return output_path
 
-    for i in range(0, 74000, 2000):
+    # for i in [0, 143, 900, 3092, 1143]:
+    #     visualize_tracks(dataset, i, video_dir)
+    for i in range(0, 74000, 1000):
         visualize_tracks(dataset, i, video_dir)
+    
     # Example usage
     # visualize_tracks(dataset, 38000, video_dir)
   

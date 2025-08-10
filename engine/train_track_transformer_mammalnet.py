@@ -27,27 +27,39 @@ def main(cfg: DictConfig):
 
     None if (cfg.dry or not fabric.is_global_zero) else init_wandb(cfg)
 
+    # tracks_dir = "/home/neerja/ATM-neerja/atm/lion_overfit_test"
+    # tracks_dir = "/home/neerja/tapnet-neerja/lion_dt_animal_320_points_10_seconds_256x256/tracks"
     # train_dataset = MammalNetDataset(dataset_dir=cfg.train_dataset, **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
-    train_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
+    if cfg.overfit_test:
+        train_tracks_dir = "/home/neerja/ATM-neerja/atm/lion_overfit_test"
+        val_tracks_dir = "/home/neerja/ATM-neerja/atm/lion_overfit_test"
+    else:
+        train_tracks_dir = "/home/neerja/ATM-neerja/atm/lion_data/train"
+        val_tracks_dir = "/home/neerja/ATM-neerja/atm/lion_data/val"
+    train_dataset = MammalNetDataset(tracks_dir=train_tracks_dir, **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
     if cfg.overfit_test:
         train_dataset = torch.utils.data.Subset(train_dataset, indices=[0])
+        # train_dataset = torch.utils.data.Subset(train_dataset, indices=[0, 143, 900, 3092, 1143])
     train_loader = get_dataloader(train_dataset, mode="train", num_workers=cfg.num_workers, batch_size=cfg.batch_size)
 
-    train_vis_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
+    train_vis_dataset = MammalNetDataset(tracks_dir=train_tracks_dir, **cfg.dataset_cfg, aug_prob=cfg.aug_prob)
     if cfg.overfit_test:
         train_vis_dataset = torch.utils.data.Subset(train_vis_dataset, indices=[0])
+        # train_vis_dataset = torch.utils.data.Subset(train_vis_dataset, indices=[0, 143, 900, 3092, 1143])
     train_vis_dataloader = get_dataloader(train_vis_dataset, mode="train", num_workers=1, batch_size=1)
 
     # val_dataset = MammalNetDataset(dataset_dir=cfg.val_dataset, **cfg.dataset_cfg, aug_prob=0.)
-    val_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=0.)
+    val_dataset = MammalNetDataset(tracks_dir=val_tracks_dir, **cfg.dataset_cfg, aug_prob=0.)
     if cfg.overfit_test:
         val_dataset = torch.utils.data.Subset(val_dataset, indices=[0])
+        # val_dataset = torch.utils.data.Subset(val_dataset, indices=[0, 143, 900, 3092, 1143])
     val_loader = get_dataloader(val_dataset, mode="val", num_workers=cfg.num_workers, batch_size=cfg.batch_size * 2)
 
     # val_vis_dataset = MammalNetDataset(dataset_dir=cfg.val_dataset, vis=True, **cfg.dataset_cfg, aug_prob=0.)
-    val_vis_dataset = MammalNetDataset(tracks_dir="/home/neerja/ATM-neerja/atm/lion_overfit_test", **cfg.dataset_cfg, aug_prob=0.)
+    val_vis_dataset = MammalNetDataset(tracks_dir=val_tracks_dir, **cfg.dataset_cfg, aug_prob=0.)
     if cfg.overfit_test:
         val_vis_dataset = torch.utils.data.Subset(val_vis_dataset, indices=[0])
+        # val_vis_dataset = torch.utils.data.Subset(val_vis_dataset, indices=[0, 143, 900, 3092, 1143])
     val_vis_dataloader = get_dataloader(val_vis_dataset, mode="val", num_workers=1, batch_size=1)
 
     model_cls = eval(cfg.model_name)
@@ -121,26 +133,32 @@ def main(cfg: DictConfig):
                     vis_dict = visualize(model, vis_dataloader, mix_precision=cfg.mix_precision)
 
                     caption = f"reconstruction (right) @ epoch {epoch}; \n Track MSE: {vis_dict['track_loss']:.4f}"
-                    # Save video to local log folder
-                    import os
-                    import cv2
-                    log_dir = os.path.join(work_dir, "visualizations")
-                    os.makedirs(log_dir, exist_ok=True)
-                    video_path = os.path.join(log_dir, f"{mode}_reconstruct_track_epoch_{epoch}.mp4")
+                    # # Save video to local log folder
+                    # import os
+                    # import cv2
+                    # log_dir = os.path.join(work_dir, "visualizations")
+                    # os.makedirs(log_dir, exist_ok=True)
+                    # video_path = os.path.join(log_dir, f"{mode}_reconstruct_track_epoch_{epoch}.mp4")
                     
-                    # Save the video locally
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    # import ipdb; ipdb.set_trace()
-                    frames, c, h, w = vis_dict["combined_track_vid"][0].shape
-                    video_writer = cv2.VideoWriter(video_path, fourcc, 10, (w, h))
-                    for i in range(frames):
-                        frame = vis_dict["combined_track_vid"][0][i].transpose(1, 2, 0)  # Convert from (C,H,W) to (H,W,C)
-                        video_writer.write(cv2.cvtColor(frame.astype(np.uint8), cv2.COLOR_RGB2BGR))
-                    video_writer.release()
-                    print(f"Video saved to {video_path}")
+                    # # Save the video locally
+                    # fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    # # import ipdb; ipdb.set_trace()
+                    # frames, c, h, w = vis_dict["combined_track_vid"][0].shape
+                    # video_writer = cv2.VideoWriter(video_path, fourcc, 10, (w, h))
+                    # for i in range(frames):
+                    #     # frame = vis_dict["combined_track_vid"][0][i].transpose(1, 2, 0)  # Convert from (C,H,W) to (H,W,C)
+                    #     import ipdb; ipdb.set_trace()
+                    #     frame = vis_dict["combined_track_vid"][0][i] # (C, H, W)
+                    #     frame = frame.transpose(1, 2, 0)  # Convert from (C,H,W) to (H,W,C)
+                    #     video_writer.write(frame)
+                    #     # video_writer.write(cv2.cvtColor(frame.astype(np.uint8), cv2.COLOR_RGB2BGR))
+                    # video_writer.release()
+                    # print(f"Video saved to {video_path}")
                     # Log to wandb
-                    # wandb_vis_track = wandb.Video(vis_dict["combined_track_vid"], fps=10, format="mp4", caption=caption)
-                    # None if cfg.dry else wandb.log({f"{mode}/reconstruct_track": wandb_vis_track}, step=epoch)
+                    wandb_vis_track = wandb.Video(vis_dict["combined_track_vid"], fps=10, format="mp4", caption=caption)
+                    None if cfg.dry else wandb.log({f"{mode}/reconstruct_track": wandb_vis_track}, step=epoch)
+                    wandb.log({f"{mode}/track_fde": vis_dict["track_fde"]}, step=epoch)
+                    wandb.log({f"{mode}/track_ade": vis_dict["track_loss"]}, step=epoch)
 
                 vis_and_log(model, train_vis_dataloader, mode="train")
                 vis_and_log(model, val_vis_dataloader, mode="val")

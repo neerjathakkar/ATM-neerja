@@ -268,6 +268,7 @@ class TrackTransformer(nn.Module):
 
         rec_track, rec_patches = self.forward(vid, track, task_emb, p_img)
         track_loss = F.mse_loss(rec_track, track)
+        # import ipdb; ipdb.set_trace()
         img_loss = F.mse_loss(rec_patches, self._patchify(vid))
         loss = track_loss + img_loss
 
@@ -288,14 +289,22 @@ class TrackTransformer(nn.Module):
         combined_track_vid = torch.cat([track_vid, rec_track_vid], dim=-1)
 
         _vid = torch.cat([_vid, _vid], dim=-1)
-        combined_track_vid = _vid * .25 + combined_track_vid * .75
 
+        track_mask = (combined_track_vid > 40).float()
+        alpha = 0.8
+        combined_track_vid = _vid * (1 - track_mask * alpha) + combined_track_vid * (track_mask * alpha)
+
+        track_endpoints = track[:, -1, :, :]
+        rec_track_endpoints = rec_track[:, -1, :, :]
+        # mse of endpoints
+        track_fde = torch.mean((track_endpoints - rec_track_endpoints) ** 2)
         ret_dict = {
             "loss": loss.sum().item(),
             "track_loss": track_loss.sum().item(),
             "img_loss": img_loss.sum().item(),
             "combined_image": combined_image.cpu().numpy().astype(np.uint8),
             "combined_track_vid": combined_track_vid.cpu().numpy().astype(np.uint8),
+            "track_fde": track_fde.item()
         }
 
         return loss.sum(), ret_dict

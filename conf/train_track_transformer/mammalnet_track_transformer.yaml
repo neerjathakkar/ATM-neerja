@@ -11,7 +11,7 @@ hydra:
     subdir: ${hydra.job.num}
 
 wandb:
-  project: mammalnet_atm_overfit
+  project: mammalnet_atm
   name: ${now:%m%d}_${experiment}_${now:%H%M}_${hydra:job.num}
   group: ${experiment}
   entity: nthakkar

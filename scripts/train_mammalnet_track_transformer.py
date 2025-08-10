@@ -15,8 +15,9 @@ args = parser.parse_args()
 # training configs
 CONFIG_NAME = "mammalnet_track_transformer"
 
-# gpu_ids = [0, 1, 2, 3]
-gpu_ids = [0]
+gpu_ids = [0, 1, 2, 3]
+# gpu_ids = [0]
+# gpu_ids = [0, 1]
 
 root_dir = "./data/atm_libero/"
 # suite_name = args.suite

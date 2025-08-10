@@ -239,7 +239,6 @@ def tracks_to_video(tracks, img_size):
     
     # Process each time step separately, starting from the last frame (to have earlier frames on top)
     for l in range(T):
-    # for l in range(T-1, -1, -1):
         # Get binary image for this timestep only
         current_tracks = tracks[:, l:l+1, :, :]  # (B, 1, N, 2)
         binary_img = tracks_to_binary_img(current_tracks, img_size=img_size).float()  # (B, 1, 3, H, W)
@@ -252,10 +251,6 @@ def tracks_to_video(tracks, img_size):
         colored_img[:, 2] = binary_img[:, 0] * cmap[l, 2] * 255
         
         track_vid = torch.maximum(track_vid, colored_img)
-        # # Alpha blending: only add new tracks where there are no existing tracks
-        # mask = (track_vid.sum(dim=1, keepdim=True) == 0).expand_as(track_vid)
-        # # track_vid = torch.where(mask, colored_img, track_vid)
-        # track_vid = torch.where(mask, alpha * colored_img + (1-alpha) * track_vid, track_vid)
     return track_vid
 
 def combine_track_and_img(track: torch.Tensor, vid: np.ndarray):
